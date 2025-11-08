@@ -134,7 +134,15 @@ def simulate_task_performance(architecture: Genotype, task_name: str) -> Dict:
     """
     # Use the full, rigorous evaluation function from gene.py
     # This provides a much more nuanced score.
-    fitness, scores = evaluate_fitness(architecture, task_name, architecture.generation)
+    # We must provide default values for the advanced evaluation parameters
+    # that exist in gene.py's version of this function.
+    eval_params = {
+        'enable_epigenetics': True,
+        'enable_baldwin': True,
+        'epistatic_linkage_k': 2,
+        'parasite_profile': None
+    }
+    fitness, scores = evaluate_fitness(architecture, task_name, architecture.generation, **eval_params)
     
     # Create a report based on the component scores
     report = [
@@ -149,7 +157,7 @@ def simulate_task_performance(architecture: Genotype, task_name: str) -> Dict:
 # ==================== CORE ANALYSIS FUNCTIONS (from gene.py) ====================
 # These functions are copied directly from gene.py to provide the same deep analysis capabilities.
 
-def evaluate_fitness(genotype: Genotype, task_type: str, generation: int, weights: Optional[Dict[str, float]] = None, **kwargs) -> Tuple[float, Dict[str, float]]:
+def evaluate_fitness(genotype: Genotype, task_type: str, generation: int, weights: Optional[Dict[str, float]] = None, enable_epigenetics: bool = False, enable_baldwin: bool = False, epistatic_linkage_k: int = 0, parasite_profile: Optional[Dict] = None, **kwargs) -> Tuple[float, Dict[str, float]]:
     """
     Multi-objective fitness evaluation with realistic task simulation.
     This is the same function as in gene.py for consistency.
@@ -178,6 +186,12 @@ def evaluate_fitness(genotype: Genotype, task_type: str, generation: int, weight
         rec_count = sum(1 for m in genotype.modules if 'recurrent' in m.module_type or 'liquid' in m.module_type)
         memory_bonus = 0.3 if any('memory' in m.id for m in genotype.modules) else 0.0
         scores['task_accuracy'] = ((rec_count / (len(genotype.modules) + 1e-6)) * 0.5 + memory_bonus + avg_plasticity * 0.15 + np.random.normal(0, 0.05))
+    
+    # --- The following logic is from the full gene.py implementation ---
+    # It's crucial for ensuring the 'scores' dictionary is always fully populated.
+    if enable_baldwin:
+        lifetime_learning_bonus = avg_plasticity * 0.2
+        scores['task_accuracy'] += lifetime_learning_bonus
 
     scores['task_accuracy'] = np.clip(scores['task_accuracy'], 0, 1)
     
@@ -200,6 +214,29 @@ def evaluate_fitness(genotype: Genotype, task_type: str, generation: int, weight
         weights = {'task_accuracy': 0.6, 'efficiency': 0.2, 'robustness': 0.1, 'generalization': 0.1}
     
     total_fitness = sum(scores[k] * weights[k] for k in weights)
+
+    epistatic_contribution = 0.0
+    if epistatic_linkage_k > 0 and len(genotype.modules) > epistatic_linkage_k:
+        num_modules = len(genotype.modules)
+        for i, module in enumerate(genotype.modules):
+            indices = list(range(num_modules))
+            indices.remove(i)
+            interacting_indices = random.sample(indices, k=epistatic_linkage_k)
+            context_signature = tuple([module.module_type] + [genotype.modules[j].module_type for j in interacting_indices])
+            hash_val = hash(context_signature)
+            epistatic_contribution += (hash_val % 2000 - 1000) / 10000.0
+    
+    total_fitness += epistatic_contribution
+
+    if parasite_profile:
+        vulnerability_score = 0.0
+        target_activation = parasite_profile.get('target_activation')
+        if target_activation:
+            for module in genotype.modules:
+                if module.activation == target_activation:
+                    vulnerability_score += 0.1
+        total_fitness *= (1.0 - min(vulnerability_score, 0.5))
+
     return max(total_fitness, 1e-6), scores
 
 def analyze_lesion_sensitivity(architecture: Genotype, base_fitness: float, task_type: str, fitness_weights: Dict) -> Dict[str, float]:
