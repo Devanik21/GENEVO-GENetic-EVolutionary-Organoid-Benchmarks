@@ -240,7 +240,28 @@ def main():
 
     # --- Task Simulation Section ---
     st.subheader("🚀 Real-World Task Simulation")
-    st.markdown("Select a benchmark task below. The system will heuristically evaluate the architecture's suitability for the task based on its known properties (e.g., module types, plasticity, scale).")
+
+    with st.expander("🤔 How is this test performed? Is it just random?"):
+        st.markdown("""
+        Not at all! While there is a tiny bit of random noise to simulate real-world unpredictability, the score is primarily determined by a **heuristic, rule-based analysis** of the architecture's evolved properties. It works like this:
+
+        1.  **Start with the Evolved Score:** The simulation begins with a baseline score derived from the architecture's final `accuracy` achieved during the evolution run. This grounds the test in its proven performance.
+
+        2.  **Apply Task-Specific Bonuses & Penalties:** The system then inspects the architecture's "genes" (its modules and properties) and modifies the score based on how well they match the demands of the chosen task. For example:
+            -   **Image Classification:** Gets a large bonus for having `conv` (Convolutional) modules, but a penalty for being excessively large (inefficient).
+            -   **Abstract Reasoning:** Is rewarded for having `graph` modules and high `plasticity`, which are crucial for relational and flexible thinking.
+            -   **Language Modeling:** Benefits greatly from `attention` or `transformer_block` modules and is rewarded for having a very large number of parameters (scale).
+            -   **Robotics Control:** Favors `recurrent` or `liquid_network` modules for handling time-series data and gives a bonus for high `efficiency` (low computational cost).
+
+        3.  **Add a Pinch of Noise:** A very small amount of random noise (`+/- 3%`) is added at the very end. This simulates the minor, unpredictable factors that always exist in real-world testing environments.
+
+        **In short, this simulation isn't training the model.** It's a quick, analytical test to see if the principles of the evolved architecture align with the known principles of solving that type of problem. The detailed reports below show you exactly which factors contributed to the final score.
+        """)
+
+    st.markdown(
+        "Click the button below to heuristically evaluate the selected architecture's suitability for various tasks "
+        "based on its known properties (e.g., module types, plasticity, scale)."
+    )
 
     tasks = [
         "Image Classification (CIFAR-100)",
