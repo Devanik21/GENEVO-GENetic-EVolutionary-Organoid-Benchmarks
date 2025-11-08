@@ -5,10 +5,14 @@ import numpy as np
 import time
 import random
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Set
 import plotly.graph_objects as go
+import plotly.express as px
+import networkx as nx
+from collections import Counter
 
-# ==================== DATA STRUCTURES (Copied from gene.py for compatibility) ====================
+
+# ==================== DATA STRUCTURES & CORE FUNCTIONS (Copied from gene.py for compatibility) ====================
 # These dataclasses are necessary to reconstruct the Genotype objects from the JSON file.
 
 @dataclass
@@ -69,6 +73,47 @@ def dict_to_genotype(d: Dict) -> Genotype:
     d['developmental_rules'] = [DevelopmentalGene(**dr) for dr in d.get('developmental_rules', [])]
     
     # The Genotype dataclass can now be instantiated with the dictionary
+    # We need to handle cases where new fields were added to Genotype but are not in the JSON
+    # by checking for their existence before passing to the constructor.
+    known_fields = {f.name for f in Genotype.__dataclass_fields__.values()}
+    filtered_d = {k: v for k, v in d.items() if k in known_fields}
+
+    return Genotype(**filtered_d)
+
+def is_viable(genotype: Genotype) -> bool:
+    """
+    Checks if a genotype is structurally viable.
+    """
+    if not genotype.modules or not genotype.connections:
+        return False
+
+    G = nx.DiGraph()
+    module_ids = {m.id for m in genotype.modules}
+    
+    for conn in genotype.connections:
+        if conn.source in module_ids and conn.target in module_ids:
+            G.add_edge(conn.source, conn.target)
+
+    if G.number_of_nodes() < 2: return False
+
+    input_nodes = [node for node, in_degree in G.in_degree() if in_degree == 0]
+    output_nodes = [node for node, out_degree in G.out_degree() if out_degree == 0]
+
+    if not input_nodes:
+        potential_inputs = [m.id for m in genotype.modules if 'input' in m.id or 'embed' in m.id or 'V1' in m.id]
+        input_nodes = [node for node in potential_inputs if node in G.nodes]
+
+    if not output_nodes:
+        potential_outputs = [m.id for m in genotype.modules if 'output' in m.id or 'PFC' in m.id]
+        output_nodes = [node for node in potential_outputs if node in G.nodes]
+
+    if not input_nodes or not output_nodes: return False
+
+    for start_node in input_nodes:
+        for end_node in output_nodes:
+            if start_node in G and end_node in G and nx.has_path(G, start_node, end_node):
+                return True
+
     return Genotype(**d)
 
 # ==================== REAL-WORLD TASK SIMULATION ====================
@@ -78,64 +123,186 @@ def simulate_task_performance(architecture: Genotype, task_name: str) -> Dict:
     Simulates the performance of a given architecture on a specific 'real-world' task.
     This is a heuristic evaluation based on architectural properties.
     """
-    # Architectural properties
-    total_params = sum(m.size for m in architecture.modules)
-    avg_plasticity = np.mean([m.plasticity for m in architecture.modules]) if architecture.modules else 0
-    module_types = {m.module_type for m in architecture.modules}
+    # Use the full, rigorous evaluation function from gene.py
+    # This provides a much more nuanced score.
+    fitness, scores = evaluate_fitness(architecture, task_name, architecture.generation)
     
-    # Base performance score
-    base_score = 0.5 + (architecture.accuracy - 0.5) * 0.5 # Anchor to evolved accuracy
+    # Create a report based on the component scores
+    report = [
+        f"Task Accuracy Score: {scores['task_accuracy']:.3f}",
+        f"Efficiency Score: {scores['efficiency']:.3f}",
+        f"Robustness Score: {scores['robustness']:.3f}",
+        f"Generalization Score: {scores['generalization']:.3f}"
+    ]
     
-    # Task-specific modifiers
-    report = []
-    if task_name == "Image Classification (CIFAR-100)":
-        # Favors convolutional hierarchies
-        conv_bonus = 0.2 if 'conv' in module_types else -0.1
-        attention_bonus = 0.1 if 'attention' in module_types else 0.0
-        efficiency_penalty = -0.1 * np.log1p(total_params / 1e6) # Penalize large models
-        
-        base_score += conv_bonus + attention_bonus + efficiency_penalty
-        report.append(f"Convolutional Bonus: {conv_bonus:+.2f}")
-        report.append(f"Attention Bonus: {attention_bonus:+.2f}")
-        report.append(f"Size Penalty: {efficiency_penalty:+.2f}")
+    return {"score": fitness, "report": report, "components": scores}
 
-    elif task_name == "Abstract Reasoning (ARC Challenge)":
-        # Favors graph, attention, and high plasticity
-        graph_bonus = 0.25 if 'graph' in module_types else -0.1
-        plasticity_bonus = 0.2 * (avg_plasticity - 0.5) # Reward high plasticity
-        reasoning_bonus = 0.1 if 'logic_gate_array' in module_types or 'semantic_parser' in module_types else 0.0
-        
-        base_score += graph_bonus + plasticity_bonus + reasoning_bonus
-        report.append(f"Graph/Relational Bonus: {graph_bonus:+.2f}")
-        report.append(f"Plasticity Bonus: {plasticity_bonus:+.2f}")
-        report.append(f"Symbolic Reasoning Bonus: {reasoning_bonus:+.2f}")
+# ==================== CORE ANALYSIS FUNCTIONS (from gene.py) ====================
+# These functions are copied directly from gene.py to provide the same deep analysis capabilities.
 
-    elif task_name == "Language Modeling (LLM Benchmark)":
-        # Favors attention, recurrence, and large parameter counts
-        attention_bonus = 0.3 if 'attention' in module_types or 'transformer_block' in module_types else -0.2
-        recurrent_bonus = 0.1 if 'recurrent' in module_types or 'lstm_unit' in module_types else 0.0
-        scale_bonus = 0.15 * np.log1p(total_params / 1e7) # Reward very large models
-        
-        base_score += attention_bonus + recurrent_bonus + scale_bonus
-        report.append(f"Attention/Transformer Bonus: {attention_bonus:+.2f}")
-        report.append(f"Recurrent Bonus: {recurrent_bonus:+.2f}")
-        report.append(f"Model Scale Bonus: {scale_bonus:+.2f}")
+def evaluate_fitness(genotype: Genotype, task_type: str, generation: int, weights: Optional[Dict[str, float]] = None, **kwargs) -> Tuple[float, Dict[str, float]]:
+    """
+    Multi-objective fitness evaluation with realistic task simulation.
+    This is the same function as in gene.py for consistency.
+    """
+    scores = {'task_accuracy': 0.0, 'efficiency': 0.0, 'robustness': 0.0, 'generalization': 0.0}
+    total_params = sum(m.size for m in genotype.modules)
+    avg_plasticity = np.mean([m.plasticity for m in genotype.modules]) if genotype.modules else 0
+    connection_density = len(genotype.connections) / (len(genotype.modules) ** 2 + 1) if genotype.modules else 0
 
-    elif task_name == "Robotics Control (Continuous Action)":
-        # Favors recurrence, plasticity, and efficiency
-        recurrent_bonus = 0.2 if 'recurrent' in module_types or 'liquid_network' in module_types else -0.1
-        plasticity_bonus = 0.15 * avg_plasticity
-        efficiency_bonus = 0.15 * architecture.efficiency # Reward low compute
-        
-        base_score += recurrent_bonus + plasticity_bonus + efficiency_bonus
-        report.append(f"Recurrent/Temporal Bonus: {recurrent_bonus:+.2f}")
-        report.append(f"Plasticity Bonus: {plasticity_bonus:+.2f}")
-        report.append(f"Efficiency Bonus: {efficiency_bonus:+.2f}")
+    # Task-specific accuracy simulation
+    if 'ARC' in task_type:
+        graph_attention_count = sum(1 for m in genotype.modules if m.module_type in ['graph', 'attention'])
+        compositional_score = graph_attention_count / (len(genotype.modules) + 1e-6)
+        plasticity_bonus = avg_plasticity * 0.4
+        efficiency_penalty = np.exp(-total_params / 50000)
+        scores['task_accuracy'] = (compositional_score * 0.4 + plasticity_bonus * 0.3 + efficiency_penalty * 0.3 + np.random.normal(0, 0.05))
+    elif 'Image' in task_type:
+        conv_count = sum(1 for m in genotype.modules if m.module_type == 'conv')
+        hierarchical_bonus = 0.2 if genotype.form_id in [1, 4] else 0.0
+        scores['task_accuracy'] = ((conv_count / (len(genotype.modules) + 1e-6)) * 0.5 + hierarchical_bonus + connection_density * 0.2 + np.random.normal(0, 0.05))
+    elif 'Language' in task_type:
+        attn_count = sum(1 for m in genotype.modules if 'attention' in m.module_type or 'transformer' in m.module_type)
+        depth_bonus = len(genotype.modules) / 10
+        scores['task_accuracy'] = ((attn_count / (len(genotype.modules) + 1e-6)) * 0.6 + min(depth_bonus, 0.3) + np.random.normal(0, 0.05))
+    elif 'Robotics' in task_type or 'Sequential' in task_type:
+        rec_count = sum(1 for m in genotype.modules if 'recurrent' in m.module_type or 'liquid' in m.module_type)
+        memory_bonus = 0.3 if any('memory' in m.id for m in genotype.modules) else 0.0
+        scores['task_accuracy'] = ((rec_count / (len(genotype.modules) + 1e-6)) * 0.5 + memory_bonus + avg_plasticity * 0.15 + np.random.normal(0, 0.05))
 
-    final_score = np.clip(base_score + np.random.normal(0, 0.03), 0, 1) # Add noise and clip
+    scores['task_accuracy'] = np.clip(scores['task_accuracy'], 0, 1)
     
-    return {"score": final_score, "report": report}
+    # Efficiency score
+    param_efficiency = 1.0 / (1.0 + np.log(1 + total_params / 10000))
+    connection_efficiency = 1.0 - min(connection_density, 0.8)
+    scores['efficiency'] = (param_efficiency + connection_efficiency) / 2
+    
+    # Robustness score
+    robustness_from_diversity = len(set(c.connection_type for c in genotype.connections)) / 3 if genotype.connections else 0
+    robustness_from_plasticity = 1.0 - abs(avg_plasticity - 0.5) * 2
+    scores['robustness'] = (robustness_from_diversity * 0.5 + robustness_from_plasticity * 0.5)
+    
+    # Generalization potential
+    depth = len(genotype.modules)
+    modularity_score = 1.0 - abs(connection_density - 0.3) * 2
+    scores['generalization'] = (min(depth / 10, 1.0) * 0.4 + modularity_score * 0.3 + avg_plasticity * 0.3)
 
+    if weights is None:
+        weights = {'task_accuracy': 0.6, 'efficiency': 0.2, 'robustness': 0.1, 'generalization': 0.1}
+    
+    total_fitness = sum(scores[k] * weights[k] for k in weights)
+    return max(total_fitness, 1e-6), scores
+
+def analyze_lesion_sensitivity(architecture: Genotype, base_fitness: float, task_type: str, fitness_weights: Dict) -> Dict[str, float]:
+    criticality_scores = {}
+    for module in architecture.modules:
+        if 'input' in module.id or 'output' in module.id: continue
+        lesioned_arch = architecture.copy()
+        lesioned_arch.modules = [m for m in lesioned_arch.modules if m.id != module.id]
+        lesioned_arch.connections = [c for c in lesioned_arch.connections if c.source != module.id and c.target != module.id]
+        if not is_viable(lesioned_arch): continue
+        lesioned_fitness, _ = evaluate_fitness(lesioned_arch, task_type, lesioned_arch.generation, fitness_weights)
+        criticality_scores[f"Module: {module.id}"] = base_fitness - lesioned_fitness
+    return criticality_scores
+
+def analyze_information_flow(architecture: Genotype) -> Dict[str, float]:
+    G = nx.DiGraph()
+    for module in architecture.modules: G.add_node(module.id)
+    for conn in architecture.connections:
+        if conn.weight > 1e-6: G.add_edge(conn.source, conn.target, weight=1.0/conn.weight)
+    if not G.nodes: return {}
+    return nx.betweenness_centrality(G, weight='weight', normalized=True)
+
+def generate_pytorch_code(architecture: Genotype) -> str:
+    module_defs = [f"            # Fitness: {architecture.fitness:.4f}, Accuracy: {architecture.accuracy:.4f}"]
+    for m in architecture.modules:
+        if m.module_type == 'mlp': module_defs.append(f"            '{m.id}': nn.Sequential(nn.Linear({m.size}, {m.size}), nn.GELU()),")
+        elif m.module_type == 'attention': module_defs.append(f"            '{m.id}': nn.MultiheadAttention(embed_dim={m.size}, num_heads=8, batch_first=True),")
+        elif m.module_type == 'conv': module_defs.append(f"            '{m.id}': nn.Conv2d(3, {m.size}, 3, padding=1),")
+        elif m.module_type == 'recurrent': module_defs.append(f"            '{m.id}': nn.LSTM({m.size}, {m.size}, batch_first=True),")
+        else: module_defs.append(f"            '{m.id}': nn.Identity(), # Placeholder for '{m.module_type}'")
+    
+    G = nx.DiGraph([(c.source, c.target) for c in architecture.connections])
+    try: exec_order = list(nx.topological_sort(G))
+    except nx.NetworkXUnfeasible: exec_order = [m.id for m in architecture.modules]
+
+    forward_pass = ["        outputs = {} # Dict to store module outputs"]
+    # Find true inputs (no incoming connections)
+    true_inputs = [m.id for m in architecture.modules if G.in_degree(m.id) == 0]
+    if not true_inputs: true_inputs = [exec_order[0]] # Fallback
+    for in_node in true_inputs: forward_pass.append(f"        outputs['{in_node}'] = x # Feed input to '{in_node}'")
+
+    for mid in exec_order:
+        if mid in true_inputs: continue
+        inputs = [c.source for c in architecture.connections if c.target == mid]
+        if not inputs: continue
+        
+        input_str = " + ".join([f"outputs['{i}']" for i in inputs if i in exec_order])
+        if not input_str: input_str = 'x' # Fallback
+
+        module_type = next((m.module_type for m in architecture.modules if m.id == mid), '')
+        if module_type == 'recurrent': forward_pass.append(f"        out, _ = self.evolved_modules['{mid}']({input_str}); outputs['{mid}'] = out")
+        elif module_type == 'attention': forward_pass.append(f"        attn_out, _ = self.evolved_modules['{mid}']({input_str}, {input_str}, {input_str}); outputs['{mid}'] = attn_out")
+        else: forward_pass.append(f"        outputs['{mid}'] = self.evolved_modules['{mid}']({input_str})")
+
+    # Find true output (no outgoing connections)
+    true_output = [m.id for m in architecture.modules if G.out_degree(m.id) == 0]
+    if not true_output: true_output = [exec_order[-1]] # Fallback
+    forward_pass.append(f"        return outputs['{true_output[0]}']")
+
+    return f"""
+import torch
+import torch.nn as nn
+
+class EvolvedArchitecture(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.evolved_modules = nn.ModuleDict({{
+{chr(10).join(module_defs)}
+        }})
+
+    def forward(self, x):
+{chr(10).join(forward_pass)}
+""".strip()
+
+def generate_tensorflow_code(architecture: Genotype) -> str:
+    # This is a simplified version for brevity. A full implementation would be similar to the PyTorch one.
+    return f"# TensorFlow code generation for {architecture.lineage_id} is a work in progress.\n# Key properties: {len(architecture.modules)} modules, {len(architecture.connections)} connections."
+
+def visualize_genotype_2d(genotype: Genotype) -> go.Figure:
+    G = nx.DiGraph()
+    for module in genotype.modules:
+        G.add_node(module.id, color=module.color, size=15 + np.sqrt(module.size),
+                   hover_text=f"<b>{module.id}</b><br>Type: {module.module_type}<br>Size: {module.size}")
+    for conn in genotype.connections:
+        if conn.source in G.nodes and conn.target in G.nodes: G.add_edge(conn.source, conn.target)
+            
+    try: pos = nx.kamada_kawai_layout(G)
+    except Exception: pos = nx.spring_layout(G, seed=42)
+
+    edge_x, edge_y = [], []
+    for edge in G.edges():
+        x0, y0 = pos[edge[0]]; x1, y1 = pos[edge[1]]
+        edge_x.extend([x0, x1, None]); edge_y.extend([y0, y1, None])
+    edge_trace = go.Scatter(x=edge_x, y=edge_y, line=dict(width=1, color='#888'), hoverinfo='none', mode='lines')
+
+    node_x, node_y, node_text, node_color, node_size = [], [], [], [], []
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x); node_y.append(y)
+        node_text.append(G.nodes[node]['hover_text'])
+        node_color.append(G.nodes[node]['color'])
+        node_size.append(G.nodes[node]['size'])
+
+    node_trace = go.Scatter(x=node_x, y=node_y, mode='markers+text', text=[node for node in G.nodes()],
+                            textposition="top center", hoverinfo='text', hovertext=node_text,
+                            marker=dict(showscale=False, color=node_color, size=node_size, line=dict(width=2, color='black')))
+    
+    fig = go.Figure(data=[edge_trace, node_trace],
+             layout=go.Layout(title=f"<b>2D View: {genotype.lineage_id}</b>", title_x=0.5, showlegend=False,
+                             margin=dict(b=20, l=5, r=5, t=50), xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False), height=400, plot_bgcolor='white'))
+    return fig
 
 # ==================== STREAMLIT APP ====================
 
@@ -152,11 +319,11 @@ def main():
     .main-header {
         font-size: 2.5rem;
         font-weight: 700;
-        color: #0d3b66;
+        color: #1e3a8a; /* Darker blue */
         text-align: center;
     }
     .sub-header {
-        font-size: 1.2rem;
+        font-size: 1.1rem;
         color: #64748b;
         text-align: center;
         margin-bottom: 2rem;
@@ -168,8 +335,8 @@ def main():
     """, unsafe_allow_html=True)
 
     # --- Header ---
-    st.markdown('<h1 class="main-header">GENEVO: Real-World Performance Simulator</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Upload your evolved architectures and test their mettle against simulated real-world benchmarks.</p>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">GENEVO: Architecture Analysis & Benchmarking</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">A rigorous diagnostic tool to perform deep analysis and simulated benchmarking on evolved architectures.</p>', unsafe_allow_html=True)
 
     # --- Session State Initialization ---
     if 'population' not in st.session_state:
@@ -226,132 +393,137 @@ def main():
         st.stop()
 
     # --- Main Display Area ---
-    st.header(f"🔬 Testing Dashboard: `{selected_arch.lineage_id}`")
+    st.header(f"🔬 Analysis Dashboard: `{selected_arch.lineage_id}`")
     
     # Display key stats of the selected architecture
-    with st.expander("Show Architecture Vitals", expanded=False):
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Evolved Fitness", f"{selected_arch.fitness:.4f}")
-        col2.metric("Evolved Accuracy", f"{selected_arch.accuracy:.3f}")
-        col3.metric("Total Parameters", f"{sum(m.size for m in selected_arch.modules):,}")
-        col4.metric("Complexity Score", f"{selected_arch.complexity:.3f}")
+    tab_vitals, tab_analysis, tab_benchmark, tab_code = st.tabs([
+        "🌐 Vitals & Architecture", 
+        "🔬 Causal & Structural Analysis",
+        "🚀 Simulated Benchmarking",
+        "💻 Code Export"
+    ])
 
-    st.markdown("---")
+    # --- TAB 1: Vitals & Architecture ---
+    with tab_vitals:
+        vitals_col1, vitals_col2 = st.columns([1, 2])
+        with vitals_col1:
+            st.markdown("#### Quantitative Profile")
+            st.metric("Evolved Fitness", f"{selected_arch.fitness:.4f}")
+            st.metric("Evolved Accuracy", f"{selected_arch.accuracy:.3f}")
+            st.metric("Efficiency Score", f"{selected_arch.efficiency:.3f}")
+            st.metric("Robustness Score", f"{selected_arch.robustness:.3f}")
+            st.metric("Total Parameters", f"{sum(m.size for m in selected_arch.modules):,}")
+            st.metric("Complexity Score", f"{selected_arch.complexity:.3f}")
 
-    # --- Task Simulation Section ---
-    st.subheader("🚀 Real-World Task Simulation")
+        with vitals_col2:
+            st.markdown("#### Architectural Blueprint (2D)")
+            st.plotly_chart(visualize_genotype_2d(selected_arch), use_container_width=True)
 
-    with st.expander("🤔 How is this test performed? Is it just random?"):
-        st.markdown("""
-        Not at all! While there is a tiny bit of random noise to simulate real-world unpredictability, the score is primarily determined by a **heuristic, rule-based analysis** of the architecture's evolved properties. It works like this:
-
-        1.  **Start with the Evolved Score:** The simulation begins with a baseline score derived from the architecture's final `accuracy` achieved during the evolution run. This grounds the test in its proven performance.
-
-        2.  **Apply Task-Specific Bonuses & Penalties:** The system then inspects the architecture's "genes" (its modules and properties) and modifies the score based on how well they match the demands of the chosen task. For example:
-            -   **Image Classification:** Gets a large bonus for having `conv` (Convolutional) modules, but a penalty for being excessively large (inefficient).
-            -   **Abstract Reasoning:** Is rewarded for having `graph` modules and high `plasticity`, which are crucial for relational and flexible thinking.
-            -   **Language Modeling:** Benefits greatly from `attention` or `transformer_block` modules and is rewarded for having a very large number of parameters (scale).
-            -   **Robotics Control:** Favors `recurrent` or `liquid_network` modules for handling time-series data and gives a bonus for high `efficiency` (low computational cost).
-
-        3.  **Add a Pinch of Noise:** A very small amount of random noise (`+/- 3%`) is added at the very end. This simulates the minor, unpredictable factors that always exist in real-world testing environments.
-
-        **In short, this simulation isn't training the model.** It's a quick, analytical test to see if the principles of the evolved architecture align with the known principles of solving that type of problem. The detailed reports below show you exactly which factors contributed to the final score.
-        """)
-
-    st.markdown(
-        "Click the button below to heuristically evaluate the selected architecture's suitability for various tasks "
-        "based on its known properties (e.g., module types, plasticity, scale)."
-    )
-
-    tasks = [
-        "Image Classification (CIFAR-100)",
-        "Abstract Reasoning (ARC Challenge)",
-        "Language Modeling (LLM Benchmark)",
-        "Robotics Control (Continuous Action)"
-    ]
-
-    if 'benchmark_results' not in st.session_state:
-        st.session_state.benchmark_results = {}
-
-    if st.button("Run All Benchmark Simulations", type="primary"):
-        st.session_state.benchmark_results = {} # Clear previous results
-        progress_bar = st.progress(0, text="Starting benchmarks...")
+    # --- TAB 2: Causal & Structural Analysis ---
+    with tab_analysis:
+        st.markdown("This tab dissects the functional importance of the architecture's components using techniques from `gene.py`.")
         
-        for i, task in enumerate(tasks):
-            time.sleep(random.uniform(1.0, 2.5)) # Simulate work
-            result = simulate_task_performance(selected_arch, task)
-            st.session_state.benchmark_results[task] = result
-            progress_bar.progress((i + 1) / len(tasks), text=f"Simulating {task}...")
-        
-        progress_bar.empty()
-        st.success("All benchmark simulations complete!")
-
-    if st.session_state.benchmark_results:
-        st.markdown("---")
-        st.subheader("📊 Benchmark Results")
-
-        # --- AGI Scorecard ---
-        st.markdown("#### 🏆 AGI Capabilities Scorecard")
-        st.markdown("An aggregated view of the architecture's simulated performance across diverse domains.")
-
-        scorecard_cols = st.columns(len(tasks))
-        overall_scores = []
-        domain_map = {
-            "Image Classification (CIFAR-100)": "Perception",
-            "Abstract Reasoning (ARC Challenge)": "Reasoning",
-            "Language Modeling (LLM Benchmark)": "Language",
-            "Robotics Control (Continuous Action)": "Action"
-        }
-
-        for i, task in enumerate(tasks):
-            with scorecard_cols[i]:
-                score = st.session_state.benchmark_results[task]['score']
-                overall_scores.append(score)
-                st.metric(label=f"**{domain_map[task]}**", value=f"{score:.1%}")
-
-        # --- Overall Score Gauge ---
-        avg_score = np.mean(overall_scores) if overall_scores else 0
-        
-        gauge_fig = go.Figure(go.Indicator(
-            mode = "gauge+number",
-            value = avg_score * 100,
-            title = {'text': "<b>Overall Performance Index</b>"},
-            gauge = {
-                'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
-                'bar': {'color': "#0d3b66"},
-                'bgcolor': "white",
-                'borderwidth': 2,
-                'bordercolor': "gray",
-                'steps': [
-                    {'range': [0, 50], 'color': '#fab3a9'},
-                    {'range': [50, 80], 'color': '#f3e0b5'},
-                    {'range': [80, 100], 'color': '#a9d1ab'}],
-                'threshold': {
-                    'line': {'color': "red", 'width': 4},
-                    'thickness': 0.75,
-                    'value': 90
-                }
-            }
-        ))
-        gauge_fig.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20))
-        st.plotly_chart(gauge_fig, use_container_width=True)
-
-        # --- Detailed Reports ---
-        st.markdown("#### Detailed Task Reports")
-        for task, result in st.session_state.benchmark_results.items():
-            with st.expander(f"**{task}** - Performance Score: **{result['score']:.2f}**"):
-                st.markdown("###### Performance Factors:")
-                report_df = pd.DataFrame([line.split(': ') for line in result['report']], columns=['Factor', 'Impact'])
-                st.table(report_df)
-                st.markdown(
-                    f"**Analysis:** The architecture's properties give it a simulated performance score of **{result['score']:.2f}** on this task. "
-                    "This score is derived from its evolved accuracy, adjusted by bonuses and penalties specific to the task demands."
+        if st.button("Run Full Causal Analysis", key="run_causal_analysis"):
+            st.session_state.causal_results = {}
+            
+            with st.spinner("Performing lesion sensitivity analysis..."):
+                # Use default weights for analysis
+                fitness_weights = {'task_accuracy': 0.6, 'efficiency': 0.2, 'robustness': 0.1, 'generalization': 0.1}
+                # The task type here is less critical, it's for the fitness function context
+                task_type_for_eval = "Abstract Reasoning (ARC-AGI-2)"
+                
+                criticality_scores = analyze_lesion_sensitivity(
+                    selected_arch, selected_arch.fitness, task_type_for_eval, fitness_weights
                 )
+                st.session_state.causal_results['criticality'] = sorted(criticality_scores.items(), key=lambda item: item[1], reverse=True)
+
+            with st.spinner("Analyzing information flow..."):
+                centrality_scores = analyze_information_flow(selected_arch)
+                st.session_state.causal_results['centrality'] = sorted(centrality_scores.items(), key=lambda item: item[1], reverse=True)
+
+        if 'causal_results' in st.session_state and st.session_state.causal_results:
+            causal_col1, causal_col2 = st.columns(2)
+            with causal_col1:
+                st.subheader("Lesion Sensitivity")
+                st.markdown("Components whose removal causes the largest drop in fitness.")
+                crit_data = st.session_state.causal_results.get('criticality', [])
+                if crit_data:
+                    df_crit = pd.DataFrame(crit_data, columns=['Component', 'Fitness Drop'])
+                    st.dataframe(df_crit.head(10))
+                else:
+                    st.info("No criticality data available.")
+
+            with causal_col2:
+                st.subheader("Information Flow Backbone")
+                st.markdown("Modules with the highest betweenness centrality, crucial for routing information.")
+                cent_data = st.session_state.causal_results.get('centrality', [])
+                if cent_data:
+                    df_cent = pd.DataFrame(cent_data, columns=['Module', 'Centrality Score'])
+                    st.dataframe(df_cent.head(10))
+                else:
+                    st.info("No centrality data available.")
+
+    # --- TAB 3: Simulated Benchmarking ---
+    with tab_benchmark:
+        st.subheader("🚀 Real-World Task Simulation")
+        with st.expander("🤔 How is this test performed?"):
+            st.markdown("""
+            This simulation uses the **exact same `evaluate_fitness` function from `gene.py`**. It is a rigorous, rule-based analysis of the architecture's properties against different task demands.
+
+            1.  **Task-Specific Heuristics:** Each task (e.g., Vision, Language) has rules that reward specific architectural features (e.g., `conv` modules for vision, `attention` for language).
+            2.  **Multi-Objective Score:** The final score is a weighted sum of four components:
+                - **Task Accuracy:** The heuristic score for the specific task.
+                - **Efficiency:** A penalty for high parameter counts and connection density.
+                - **Robustness:** A measure of architectural stability.
+                - **Generalization:** A score based on properties linked to generalization potential.
+            
+            This provides a much more nuanced and credible estimate of performance than a simple random score. The detailed reports show the breakdown of these components.
+            """)
+
+        tasks = ["Vision (ImageNet)", "Language (MMLU-Pro)", "Abstract Reasoning (ARC-AGI-2)", "Robotics Control (Continuous Action)"]
+
+        if 'benchmark_results' not in st.session_state:
+            st.session_state.benchmark_results = {}
+
+        if st.button("Run All Benchmark Simulations", type="primary"):
+            st.session_state.benchmark_results = {}
+            progress_bar = st.progress(0, text="Starting benchmarks...")
+            for i, task in enumerate(tasks):
+                time.sleep(1.5) # Simulate work
+                result = simulate_task_performance(selected_arch, task)
+                st.session_state.benchmark_results[task] = result
+                progress_bar.progress((i + 1) / len(tasks), text=f"Simulating {task}...")
+            progress_bar.empty()
+            st.success("All benchmark simulations complete!")
+
+        if st.session_state.benchmark_results:
+            st.markdown("---")
+            st.subheader("📊 Benchmark Results")
+            
+            for task, result in st.session_state.benchmark_results.items():
+                with st.expander(f"**{task}** - Overall Score: **{result['score']:.3f}**"):
+                    st.markdown("###### Component Scores:")
+                    cols = st.columns(4)
+                    cols[0].metric("Task Accuracy", f"{result['components']['task_accuracy']:.3f}")
+                    cols[1].metric("Efficiency", f"{result['components']['efficiency']:.3f}")
+                    cols[2].metric("Robustness", f"{result['components']['robustness']:.3f}")
+                    cols[3].metric("Generalization", f"{result['components']['generalization']:.3f}")
+
+    # --- TAB 4: Code Export ---
+    with tab_code:
+        st.markdown("The genotype can be translated into functional code for deep learning frameworks, providing a direct path from discovery to application.")
+        code_col1, code_col2 = st.columns(2)
+        with code_col1:
+            st.subheader("PyTorch Code")
+            st.code(generate_pytorch_code(selected_arch), language='python')
+        with code_col2:
+            st.subheader("TensorFlow / Keras Code")
+            st.code(generate_tensorflow_code(selected_arch), language='python')
 
     st.sidebar.markdown("---")
     st.sidebar.info(
-        "This application provides a **heuristic simulation** of real-world performance. "
-        "Scores are based on architectural properties, not on actual model training or inference."
+        "This application provides a **rigorous analysis and heuristic simulation** of real-world performance. "
+        "Scores are based on architectural properties from `gene.py`'s evaluation logic, not on actual model training."
     )
 
 if __name__ == "__main__":
