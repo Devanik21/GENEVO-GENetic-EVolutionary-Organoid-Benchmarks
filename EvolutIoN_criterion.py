@@ -148,6 +148,107 @@ def is_viable(genotype: Genotype) -> bool:
 
     return Genotype(**d)
 
+def run_real_world_simulation(architecture: Genotype, task_name: str) -> Dict:
+    """
+    A more advanced and convincing simulation of a real-world test,
+    including a fake training loop and detailed, plausible metrics.
+    """
+    # 1. Get the base performance characteristics from the rigorous evaluation
+    eval_params = {
+        'enable_epigenetics': True, 'enable_baldwin': True,
+        'epistatic_linkage_k': 2, 'parasite_profile': None
+    }
+    base_fitness, scores = evaluate_fitness(architecture, task_name, architecture.generation, **eval_params)
+    base_accuracy = scores['task_accuracy']
+    base_robustness = scores['robustness']
+
+    # 2. Simulate a training history (e.g., over 5 epochs)
+    training_log = []
+    # Start with a lower accuracy and higher loss, then converge towards the base_accuracy
+    current_acc = base_accuracy * random.uniform(0.6, 0.8)
+    current_loss = (1 - current_acc) * random.uniform(1.2, 1.5)
+    
+    num_epochs = 5
+    for epoch in range(1, num_epochs + 1):
+        # Improve accuracy and reduce loss each epoch
+        acc_gain = (base_accuracy - current_acc) / (num_epochs - epoch + 1) * random.uniform(0.8, 1.2)
+        current_acc += acc_gain
+        current_loss *= random.uniform(0.7, 0.9)
+        
+        # Add some noise based on robustness (less robust = more volatile training)
+        epoch_acc = np.clip(current_acc + (1 - base_robustness) * np.random.normal(0, 0.02), 0, 1)
+        epoch_loss = max(0.01, current_loss + (1 - base_robustness) * np.random.normal(0, 0.05))
+        
+        training_log.append({'epoch': epoch, 'accuracy': epoch_acc, 'loss': epoch_loss})
+
+    # 3. Simulate final test set evaluation metrics
+    final_accuracy = training_log[-1]['accuracy']
+    
+    # Generate plausible precision, recall, F1 based on final accuracy
+    # Higher accuracy leads to tighter, better scores
+    p_r_f1_spread = (1 - final_accuracy) * 0.2
+    precision = np.clip(final_accuracy + np.random.normal(0, p_r_f1_spread), 0, 1)
+    recall = np.clip(final_accuracy + np.random.normal(0, p_r_f1_spread), 0, 1)
+    f1_score = 2 * (precision * recall) / (precision + recall + 1e-9)
+
+    # 4. Simulate a confusion matrix for classification tasks
+    confusion_matrix = None
+    if "Vision" in task_name or "Image" in task_name:
+        # Simulate a 4-class confusion matrix
+        n_samples = 1000
+        n_classes = 4
+        cm = np.zeros((n_classes, n_classes), dtype=int)
+        
+        # Correct predictions are on the diagonal
+        correct_per_class = int((n_samples / n_classes) * final_accuracy)
+        for i in range(n_classes):
+            cm[i, i] = correct_per_class
+        
+        # Distribute incorrect predictions
+        errors = n_samples - np.sum(cm)
+        while errors > 0:
+            i, j = random.randint(0, n_classes-1), random.randint(0, n_classes-1)
+            if i != j:
+                cm[i, j] += 1
+                errors -= 1
+        confusion_matrix = cm.tolist()
+
+    # 5. Generate qualitative examples
+    qualitative_examples = []
+    if "Vision" in task_name or "Image" in task_name:
+        # Simulate image classification results
+        is_correct = random.random() < final_accuracy
+        qualitative_examples.append({
+            "type": "image",
+            "prompt": "Classify the following image:",
+            "content": "https://purl.im/g/2/3.svg", # Placeholder image
+            "prediction": "Cat" if is_correct else "Dog",
+            "ground_truth": "Cat",
+            "is_correct": is_correct
+        })
+    elif "Language" in task_name:
+        # Simulate language model response
+        qualitative_examples.append({
+            "type": "text",
+            "prompt": "Explain the theory of relativity in simple terms.",
+            "content": "Einstein's theory of relativity is about how space and time are linked. A key idea is that the laws of physics are the same for everyone, and the speed of light is constant. This leads to strange effects, like time slowing down for fast-moving objects.",
+            "quality_score": final_accuracy
+        })
+
+    return {
+        "overall_score": base_fitness,
+        "training_log": training_log,
+        "test_metrics": {
+            "Accuracy": final_accuracy,
+            "Precision": precision,
+            "Recall": recall,
+            "F1-Score": f1_score
+        },
+        "confusion_matrix": confusion_matrix,
+        "qualitative_examples": qualitative_examples,
+        "component_scores": scores
+    }
+
 # ==================== REAL-WORLD TASK SIMULATION ====================
 
 def simulate_task_performance(architecture: Genotype, task_name: str) -> Dict:
@@ -552,14 +653,11 @@ def main():
             st.markdown("""
             This simulation uses the **exact same `evaluate_fitness` function from `gene.py`**. It is a rigorous, rule-based analysis of the architecture's properties against different task demands.
 
-            1.  **Task-Specific Heuristics:** Each task (e.g., Vision, Language) has rules that reward specific architectural features (e.g., `conv` modules for vision, `attention` for language).
-            2.  **Multi-Objective Score:** The final score is a weighted sum of four components:
-                - **Task Accuracy:** The heuristic score for the specific task.
-                - **Efficiency:** A penalty for high parameter counts and connection density.
-                - **Robustness:** A measure of architectural stability.
-                - **Generalization:** A score based on properties linked to generalization potential.
+            1.  **Simulated Training:** The app simulates a multi-epoch training process. The final accuracy is based on the architecture's evolved properties, but the training curve (loss, accuracy over time) is dynamically generated to look realistic.
+            2.  **Detailed Metrics:** After "training," the system evaluates the model on a simulated test set, generating standard metrics like Precision, Recall, F1-Score, and a confusion matrix.
+            3.  **Qualitative Examples:** The test provides concrete examples of the model's simulated performance on sample data, giving you a feel for its capabilities.
             
-            This provides a much more nuanced and credible estimate of performance than a simple random score. The detailed reports show the breakdown of these components.
+            The underlying performance is still determined by the architecture's evolved traits (e.g., `conv` modules for vision, high `robustness` for stable training), but the presentation is a much more realistic and detailed simulation of a true benchmark test.
             """)
 
         tasks = ["Vision (ImageNet)", "Language (MMLU-Pro)", "Abstract Reasoning (ARC-AGI-2)", "Robotics Control (Continuous Action)"]
@@ -576,24 +674,63 @@ def main():
                 # to prevent the scores from one task from bleeding into the next.
                 arch_copy = selected_arch.copy()
                 arch_copy.lineage_id = selected_arch.lineage_id # Preserve original ID for display
-                result = simulate_task_performance(arch_copy, task)
+                result = run_real_world_simulation(arch_copy, task)
                 st.session_state.benchmark_results[task] = result
                 progress_bar.progress((i + 1) / len(tasks), text=f"Simulating {task}...")
             progress_bar.empty()
             st.success("All benchmark simulations complete!")
 
         if st.session_state.benchmark_results:
-            st.markdown("---")
-            st.subheader("📊 Benchmark Results")
-            
             for task, result in st.session_state.benchmark_results.items():
-                with st.expander(f"**{task}** - Overall Score: **{result['score']:.3f}**"):
-                    st.markdown("###### Component Scores:")
-                    cols = st.columns(4)
-                    cols[0].metric("Task Accuracy", f"{result['components']['task_accuracy']:.3f}")
-                    cols[1].metric("Efficiency", f"{result['components']['efficiency']:.3f}")
-                    cols[2].metric("Robustness", f"{result['components']['robustness']:.3f}")
-                    cols[3].metric("Generalization", f"{result['components']['generalization']:.3f}")
+                with st.expander(f"**{task}** - Final Accuracy: **{result['test_metrics']['Accuracy']:.2%}**", expanded=True):
+                    
+                    res_col1, res_col2 = st.columns([1, 1])
+
+                    with res_col1:
+                        st.markdown("##### 📈 Simulated Training Log")
+                        log_df = pd.DataFrame(result['training_log'])
+                        fig = px.line(log_df, x='epoch', y=['accuracy', 'loss'], markers=True,
+                                      labels={'value': 'Value', 'variable': 'Metric'}, height=250)
+                        fig.update_layout(margin=dict(l=20, r=20, t=30, b=20), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                        st.plotly_chart(fig, use_container_width=True)
+
+                        st.markdown("##### 📊 Test Set Performance")
+                        metric_cols = st.columns(4)
+                        for i, (metric, value) in enumerate(result['test_metrics'].items()):
+                            metric_cols[i].metric(metric, f"{value:.3f}")
+
+                    with res_col2:
+                        if result['confusion_matrix']:
+                            st.markdown("##### 🔀 Confusion Matrix")
+                            cm_fig = px.imshow(result['confusion_matrix'], text_auto=True,
+                                               labels=dict(x="Predicted", y="Actual", color="Count"),
+                                               x=['C1', 'C2', 'C3', 'C4'], y=['C1', 'C2', 'C3', 'C4'],
+                                               color_continuous_scale='Blues', height=300)
+                            cm_fig.update_layout(margin=dict(l=20, r=20, t=30, b=20))
+                            st.plotly_chart(cm_fig, use_container_width=True)
+                        else:
+                            st.markdown("##### 📝 Qualitative Analysis")
+                        
+                        for ex in result['qualitative_examples']:
+                            if ex['type'] == 'image':
+                                st.image(ex['content'], width=100, caption=ex['prompt'])
+                                if ex['is_correct']:
+                                    st.success(f"Prediction: **{ex['prediction']}** (Correct)")
+                                else:
+                                    st.error(f"Prediction: **{ex['prediction']}** (Incorrect, was {ex['ground_truth']})")
+                            elif ex['type'] == 'text':
+                                st.info(f"**Prompt:** {ex['prompt']}")
+                                st.markdown(f"> {ex['content']}")
+                                st.progress(ex['quality_score'], text=f"Response Quality: {ex['quality_score']:.2%}")
+
+                    with st.container(border=True):
+                        st.markdown("###### Evolved Architectural Properties (Driving the Simulation)")
+                        prop_cols = st.columns(4)
+                        prop_cols[0].metric("Base Accuracy Score", f"{result['component_scores']['task_accuracy']:.3f}")
+                        prop_cols[1].metric("Efficiency Score", f"{result['component_scores']['efficiency']:.3f}")
+                        prop_cols[2].metric("Robustness Score", f"{result['component_scores']['robustness']:.3f}")
+                        prop_cols[3].metric("Generalization Score", f"{result['component_scores']['generalization']:.3f}")
+
 
     # --- TAB 4: Code Export ---
     with tab_code:
