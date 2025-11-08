@@ -554,7 +554,6 @@ def main():
                 arch_copy = selected_arch.copy()
                 arch_copy.lineage_id = selected_arch.lineage_id # Preserve original ID for display
                 result = simulate_task_performance(arch_copy, task)
-                result = simulate_task_performance(selected_arch, task)
                 st.session_state.benchmark_results[task] = result
                 progress_bar.progress((i + 1) / len(tasks), text=f"Simulating {task}...")
             progress_bar.empty()
