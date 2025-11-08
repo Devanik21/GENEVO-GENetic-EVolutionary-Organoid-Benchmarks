@@ -72,13 +72,22 @@ def dict_to_genotype(d: Dict) -> Genotype:
     d['connections'] = [ConnectionGene(**c) for c in d.get('connections', [])]
     d['developmental_rules'] = [DevelopmentalGene(**dr) for dr in d.get('developmental_rules', [])]
     
-    # The Genotype dataclass can now be instantiated with the dictionary
-    # We need to handle cases where new fields were added to Genotype but are not in the JSON
-    # by checking for their existence before passing to the constructor.
-    known_fields = {f.name for f in Genotype.__dataclass_fields__.values()}
-    filtered_d = {k: v for k, v in d.items() if k in known_fields}
-
-    return Genotype(**filtered_d)
+    # Create a full Genotype instance first to get all default values
+    # This prevents KeyErrors if the JSON is missing fields like 'accuracy', 'efficiency', etc.
+    # which are calculated during evolution but not always saved.
+    base_genotype = Genotype(modules=[], connections=[])
+    
+    # Update the base instance with values from the dictionary
+    base_genotype.modules = d.get('modules', [])
+    base_genotype.connections = d.get('connections', [])
+    base_genotype.developmental_rules = d.get('developmental_rules', [])
+    
+    # Update all other fields present in the dictionary
+    for key, value in d.items():
+        if hasattr(base_genotype, key):
+            setattr(base_genotype, key, value)
+            
+    return base_genotype
 
 def is_viable(genotype: Genotype) -> bool:
     """
