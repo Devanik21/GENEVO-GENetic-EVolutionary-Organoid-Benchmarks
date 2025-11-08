@@ -239,15 +239,15 @@ def evaluate_fitness(genotype: Genotype, task_type: str, generation: int, weight
 
     return max(total_fitness, 1e-6), scores
 
-def analyze_lesion_sensitivity(architecture: Genotype, base_fitness: float, task_type: str, fitness_weights: Dict) -> Dict[str, float]:
+def analyze_lesion_sensitivity(architecture: Genotype, base_fitness: float, task_type: str, fitness_weights: Dict, eval_params: Dict) -> Dict[str, float]:
     criticality_scores = {}
     for module in architecture.modules:
         if 'input' in module.id or 'output' in module.id: continue
         lesioned_arch = architecture.copy()
         lesioned_arch.modules = [m for m in lesioned_arch.modules if m.id != module.id]
         lesioned_arch.connections = [c for c in lesioned_arch.connections if c.source != module.id and c.target != module.id]
-        if not is_viable(lesioned_arch): continue
-        lesioned_fitness, _ = evaluate_fitness(lesioned_arch, task_type, lesioned_arch.generation, fitness_weights)
+        if not is_viable(lesioned_arch): continue # type: ignore
+        lesioned_fitness, _ = evaluate_fitness(lesioned_arch, task_type, lesioned_arch.generation, fitness_weights, **eval_params)
         criticality_scores[f"Module: {module.id}"] = base_fitness - lesioned_fitness
     return criticality_scores
 
@@ -478,8 +478,15 @@ def main():
                 # The task type here is less critical, it's for the fitness function context
                 task_type_for_eval = "Abstract Reasoning (ARC-AGI-2)"
                 
+                eval_params = {
+                    'enable_epigenetics': True,
+                    'enable_baldwin': True,
+                    'epistatic_linkage_k': 2,
+                    'parasite_profile': None
+                }
+
                 criticality_scores = analyze_lesion_sensitivity(
-                    selected_arch, selected_arch.fitness, task_type_for_eval, fitness_weights
+                    selected_arch, selected_arch.fitness, task_type_for_eval, fitness_weights, eval_params
                 )
                 st.session_state.causal_results['criticality'] = sorted(criticality_scores.items(), key=lambda item: item[1], reverse=True)
 
@@ -574,4 +581,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
