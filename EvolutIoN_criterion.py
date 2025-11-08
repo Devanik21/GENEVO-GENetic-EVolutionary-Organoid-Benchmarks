@@ -65,6 +65,29 @@ class Genotype:
     robustness: float = 0.0
     form_id: int = 1
 
+    def copy(self):
+        """Deep copy with new lineage"""
+        new_genotype = Genotype(
+            modules=[ModuleGene(
+                m.id, m.module_type, m.size, m.activation, m.normalization,
+                m.dropout_rate, m.learning_rate_mult, m.plasticity, m.color, m.position
+            ) for m in self.modules],
+            connections=[ConnectionGene(
+                c.source, c.target, c.weight, c.connection_type, c.delay, c.plasticity_rule
+            ) for c in self.connections],
+            developmental_rules=[DevelopmentalGene(
+                d.rule_type, d.trigger_condition, d.parameters.copy()
+            ) for d in self.developmental_rules],
+            meta_parameters=self.meta_parameters.copy(),
+            epigenetic_markers={k: v * 0.5 for k, v in self.epigenetic_markers.items()}, # Imperfect inheritance
+            fitness=self.fitness,
+            age=0,
+            generation=self.generation,
+            parent_ids=[self.lineage_id],
+            form_id=self.form_id
+        )
+        return new_genotype
+
 def dict_to_genotype(d: Dict) -> Genotype:
     """Deserializes a dictionary back into a Genotype object."""
     # Reconstruct nested dataclasses
