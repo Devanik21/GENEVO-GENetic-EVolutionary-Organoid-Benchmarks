@@ -143,6 +143,12 @@ def simulate_task_performance(architecture: Genotype, task_name: str) -> Dict:
         'parasite_profile': None
     }
     fitness, scores = evaluate_fitness(architecture, task_name, architecture.generation, **eval_params)
+
+    # CRITICAL FIX: Update the architecture object with the calculated scores.
+    # This mirrors the behavior in gene.py and ensures all downstream functions have the correct data.
+    architecture.accuracy = scores['task_accuracy']
+    architecture.efficiency = scores['efficiency']
+    architecture.robustness = scores['robustness']
     
     # Create a report based on the component scores
     report = [
@@ -543,6 +549,11 @@ def main():
             progress_bar = st.progress(0, text="Starting benchmarks...")
             for i, task in enumerate(tasks):
                 time.sleep(1.5) # Simulate work
+                # IMPORTANT: We must use a copy of the selected architecture for each simulation
+                # to prevent the scores from one task from bleeding into the next.
+                arch_copy = selected_arch.copy()
+                arch_copy.lineage_id = selected_arch.lineage_id # Preserve original ID for display
+                result = simulate_task_performance(arch_copy, task)
                 result = simulate_task_performance(selected_arch, task)
                 st.session_state.benchmark_results[task] = result
                 progress_bar.progress((i + 1) / len(tasks), text=f"Simulating {task}...")
