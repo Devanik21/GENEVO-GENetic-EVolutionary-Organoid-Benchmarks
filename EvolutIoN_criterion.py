@@ -251,39 +251,6 @@ def run_real_world_simulation(architecture: Genotype, task_name: str) -> Dict:
 
 # ==================== REAL-WORLD TASK SIMULATION ====================
 
-def simulate_task_performance(architecture: Genotype, task_name: str) -> Dict:
-    """
-    Simulates the performance of a given architecture on a specific 'real-world' task.
-    This is a heuristic evaluation based on architectural properties.
-    """
-    # Use the full, rigorous evaluation function from gene.py
-    # This provides a much more nuanced score.
-    # We must provide default values for the advanced evaluation parameters
-    # that exist in gene.py's version of this function.
-    eval_params = {
-        'enable_epigenetics': True,
-        'enable_baldwin': True,
-        'epistatic_linkage_k': 2,
-        'parasite_profile': None
-    }
-    fitness, scores = evaluate_fitness(architecture, task_name, architecture.generation, **eval_params)
-
-    # CRITICAL FIX: Update the architecture object with the calculated scores.
-    # This mirrors the behavior in gene.py and ensures all downstream functions have the correct data.
-    architecture.accuracy = scores['task_accuracy']
-    architecture.efficiency = scores['efficiency']
-    architecture.robustness = scores['robustness']
-    
-    # Create a report based on the component scores
-    report = [
-        f"Task Accuracy Score: {scores['task_accuracy']:.3f}",
-        f"Efficiency Score: {scores['efficiency']:.3f}",
-        f"Robustness Score: {scores['robustness']:.3f}",
-        f"Generalization Score: {scores['generalization']:.3f}"
-    ]
-    
-    return {"score": fitness, "report": report, "components": scores}
-
 # ==================== CORE ANALYSIS FUNCTIONS (from gene.py) ====================
 # These functions are copied directly from gene.py to provide the same deep analysis capabilities.
 
